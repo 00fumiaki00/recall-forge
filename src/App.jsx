@@ -7,28 +7,28 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // ── Gist Sync ──
 const GIST_FILE = 'recallforge-data.json';
+const GH = (token) => ({ 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'RecallForge' });
+async function gistFind(token) {
+  for (let page = 1; page <= 5; page++) {
+    const list = await fetch(`https://api.github.com/gists?per_page=100&page=${page}`, { headers: GH(token) }).then(r => r.json());
+    if (!Array.isArray(list) || list.length === 0) break;
+    const found = list.find(g => g.files?.[GIST_FILE]);
+    if (found) return found.id;
+    if (list.length < 100) break;
+  }
+  return null;
+}
 async function gistSave(token, gistId, data) {
   const body = { files: { [GIST_FILE]: { content: JSON.stringify(data) } } };
   if (!gistId) {
-    const r = await fetch('https://api.github.com/gists', {
-      method: 'POST',
-      headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'RecallForge' },
-      body: JSON.stringify({ ...body, description: 'RecallForge Sync Data', public: false })
-    }).then(r => r.json());
+    const r = await fetch('https://api.github.com/gists', { method: 'POST', headers: GH(token), body: JSON.stringify({ ...body, description: 'RecallForge Sync Data', public: false }) }).then(r => r.json());
     return r.id || null;
-  } else {
-    await fetch(`https://api.github.com/gists/${gistId}`, {
-      method: 'PATCH',
-      headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'RecallForge' },
-      body: JSON.stringify(body)
-    });
-    return gistId;
   }
+  await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers: GH(token), body: JSON.stringify(body) });
+  return gistId;
 }
 async function gistLoad(token, gistId) {
-  const r = await fetch(`https://api.github.com/gists/${gistId}`, {
-    headers: { 'Authorization': `token ${token}`, 'User-Agent': 'RecallForge' }
-  }).then(r => r.json());
+  const r = await fetch(`https://api.github.com/gists/${gistId}`, { headers: GH(token) }).then(r => r.json());
   if (!r.files?.[GIST_FILE]) return null;
   return JSON.parse(r.files[GIST_FILE].content);
 }
@@ -161,9 +161,13 @@ export default function App() {
 
   const [syncToken, setSyncToken] = useState(() => get("rf:synctoken", ""));
   const [gistId, setGistId] = useState(() => get("rf:gistid", ""));
-  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error
+  const [syncStatus, setSyncStatus] = useState("idle");
   const [syncTokenInput, setSTI] = useState("");
   const syncTimer = useRef(null);
+  const syncTokenRef = useRef(syncToken);
+  const gistIdRef = useRef(gistId);
+  useEffect(() => { syncTokenRef.current = syncToken; }, [syncToken]);
+  useEffect(() => { gistIdRef.current = gistId; }, [gistId]);
 
   const saveMat = useCallback(m => { setMaterials(m); set("rf:mat", m); }, []);
   const saveAtt = useCallback(a => { setAttempts(a); set("rf:att", a); }, []);
@@ -181,13 +185,14 @@ export default function App() {
 
   // Auto-save to Gist on change (debounced 3s)
   useEffect(() => {
-    if (!syncToken) return;
+    if (!syncTokenRef.current) return;
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(async () => {
+      const token = syncTokenRef.current; const gId = gistIdRef.current;
+      if (!token || !gId) return;
       setSyncStatus("syncing");
       try {
-        const newId = await gistSave(syncToken, gistId || null, { materials, attempts });
-        if (newId && newId !== gistId) { setGistId(newId); set("rf:gistid", newId); }
+        await gistSave(token, gId, { materials, attempts });
         setSyncStatus("ok");
       } catch { setSyncStatus("error"); }
     }, 3000);
@@ -413,8 +418,16 @@ export default function App() {
               const t = syncTokenInput.trim(); if (!t) return;
               setSyncStatus("syncing");
               try {
-                const newId = await gistSave(t, null, { materials, attempts });
-                setSyncToken(t); setGistId(newId); set("rf:synctoken", t); set("rf:gistid", newId); setSTI(""); setSyncStatus("ok");
+                const existingId = await gistFind(t);
+                if (existingId) {
+                  const data = await gistLoad(t, existingId);
+                  if (data?.materials) { saveMat(data.materials); }
+                  if (data?.attempts) { saveAtt(data.attempts); }
+                  setSyncToken(t); setGistId(existingId); set("rf:synctoken", t); set("rf:gistid", existingId); setSTI(""); setSyncStatus("ok");
+                } else {
+                  const newId = await gistSave(t, null, { materials, attempts });
+                  setSyncToken(t); setGistId(newId); set("rf:synctoken", t); set("rf:gistid", newId); setSTI(""); setSyncStatus("ok");
+                }
               } catch { setSyncStatus("error"); }
             }}>接続</button>
           </div>
