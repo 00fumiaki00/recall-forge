@@ -76,6 +76,15 @@ async function generateCloze(key, text) {
   try { return JSON.parse(raw.replace(/```json|```/g, "").trim()); } catch { return []; }
 }
 
+async function generateSummary(key, text) {
+  const sys = `資格試験対策AIとして、教材テキストから「試験で問われる重要ポイント」を抽出。定義・数値・手順・リストを優先。JSON配列のみ出力。
+[{"title":"ポイントのタイトル","detail":"簡潔な説明（1〜2文）"}]
+5〜8項目。前置き不要。`;
+  const raw = await askClaude(key, [{ role: "user", content: text }], sys);
+  try { return JSON.parse(raw.replace(/```json|```/g, "").trim()); }
+  catch { return [{ title: "要点", detail: raw }]; }
+}
+
 async function evaluateRecall(key, material, keywords, shownKws, userExp, level) {
   const ld = ["全キーワード表示","キーワード60%表示","キーワード30%表示","キーワードなし"][level] || "";
   const sys = `学習評価AI。難易度:${ld}（高いほど寛大に）。JSON形式のみ出力。
@@ -508,6 +517,17 @@ export default function App() {
           {!isRef && <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10, marginTop: 8 }}>{sec.keywords.map((kw, i) => <span key={i} style={{ ...S.tag, fontSize: 11, padding: "2px 10px" }}>{kw}</span>)}</div>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button style={{ ...S.bsm(), background: "#0f2d1a", color: "#4ade80" }} onClick={() => { setSS(sec); setView("source"); }}>📖 原文</button>
+            <button style={{ ...S.bsm(), background: "#1a1a2e", color: "#f59e0b" }} onClick={async () => {
+              setSM(mat); setSC(chap); setSS(sec);
+              if (sec.summary) { setView("summary"); return; }
+              setProc(true); setPM("要点を生成中...");
+              try {
+                const summary = await generateSummary(K, sec.content);
+                const updated = materials.map(m => m.id !== mat.id ? m : { ...m, chapters: m.chapters.map(c => c.id !== chap.id ? c : { ...c, sections: c.sections.map(s => s.id === sec.id ? { ...s, summary } : s) }) });
+                saveMat(updated);
+              } catch(e) { alert("生成失敗: " + e.message); }
+              setProc(false); setView("summary");
+            }}>📋 要点</button>
             {!isRef && <>
               <button style={S.btn(true)} onClick={() => startRecall(mat, chap, sec)}>📝 説明</button>
               <button style={{ ...S.btn(), background: "#312e81", color: "#c4b5fd" }} onClick={() => startCloze(mat, chap, sec)}>🧩 精密</button>
@@ -576,6 +596,35 @@ export default function App() {
           <button style={{ ...S.btn(true), width: "100%", opacity: hasC ? 1 : .4 }} disabled={!hasC} onClick={handleManualRegister}>キーワード抽出して登録</button>
         </div>
       )}
+    </div>); }
+
+  // ═══════ SUMMARY ═══════
+  if (view === "summary" && selSec) {
+    const sum = selSec ? (materials.find(m=>m.id===selMat?.id)?.chapters.find(c=>c.id===selChap?.id)?.sections.find(s=>s.id===selSec.id)?.summary || selSec.summary) : null;
+    return (
+    <div style={S.app}>{OV}
+      <div style={S.hdr}><button style={S.bk} onClick={() => setView("sections")}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>📋 要点まとめ</div><div style={{ fontSize: 12, color: "#64748b" }}>{selSec.title}</div></div></div>
+      {sum ? sum.map((pt, i) => (
+        <div key={i} style={{ ...S.card, borderLeft: "3px solid #f59e0b", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b", marginBottom: 6 }}>✅ {pt.title}</div>
+          <div style={{ fontSize: 14, color: "#cbd5e1", lineHeight: 1.8 }}>{pt.detail}</div>
+        </div>
+      )) : <div style={S.emp}>要点がありません</div>}
+      <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button style={{ ...S.bsm(), color: "#64748b" }} onClick={async () => {
+          setProc(true); setPM("要点を再生成中...");
+          try {
+            const summary = await generateSummary(K, selSec.content);
+            const updated = materials.map(m => m.id !== selMat.id ? m : { ...m, chapters: m.chapters.map(c => c.id !== selChap.id ? c : { ...c, sections: c.sections.map(s => s.id === selSec.id ? { ...s, summary } : s) }) });
+            saveMat(updated); setSS({ ...selSec, summary });
+          } catch(e) { alert("生成失敗: " + e.message); }
+          setProc(false);
+        }}>🔄 再生成</button>
+        {!selSec.referenceOnly && <>
+          <button style={{ ...S.btn(true), flex: 1 }} onClick={() => startRecall(selMat, selChap, selSec)}>📝 説明モードへ</button>
+          <button style={{ ...S.btn(), flex: 1, background: "#312e81", color: "#c4b5fd" }} onClick={() => startCloze(selMat, selChap, selSec)}>🧩 精密モードへ</button>
+        </>}
+      </div>
     </div>); }
 
   // ═══════ SOURCE ═══════
