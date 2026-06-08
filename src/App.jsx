@@ -5,6 +5,34 @@ const get = (k, d=null) => { try { const v=localStorage.getItem(k); return v?JSO
 const set = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){ console.error(e); } };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+// ── Gist Sync ──
+const GIST_FILE = 'recallforge-data.json';
+async function gistSave(token, gistId, data) {
+  const body = { files: { [GIST_FILE]: { content: JSON.stringify(data) } } };
+  if (!gistId) {
+    const r = await fetch('https://api.github.com/gists', {
+      method: 'POST',
+      headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'RecallForge' },
+      body: JSON.stringify({ ...body, description: 'RecallForge Sync Data', public: false })
+    }).then(r => r.json());
+    return r.id || null;
+  } else {
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: { 'Authorization': `token ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'RecallForge' },
+      body: JSON.stringify(body)
+    });
+    return gistId;
+  }
+}
+async function gistLoad(token, gistId) {
+  const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: { 'Authorization': `token ${token}`, 'User-Agent': 'RecallForge' }
+  }).then(r => r.json());
+  if (!r.files?.[GIST_FILE]) return null;
+  return JSON.parse(r.files[GIST_FILE].content);
+}
+
 // ── Claude API ──
 async function askClaude(apiKey, messages, sys) {
   const body = { model: "claude-haiku-4-5-20251001", max_tokens: 4096, messages };
@@ -131,8 +159,39 @@ export default function App() {
   const [clozeAs, setCA] = useState({});
   const [clozeResult, setCR] = useState(null);
 
+  const [syncToken, setSyncToken] = useState(() => get("rf:synctoken", ""));
+  const [gistId, setGistId] = useState(() => get("rf:gistid", ""));
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | ok | error
+  const [syncTokenInput, setSTI] = useState("");
+  const syncTimer = useRef(null);
+
   const saveMat = useCallback(m => { setMaterials(m); set("rf:mat", m); }, []);
   const saveAtt = useCallback(a => { setAttempts(a); set("rf:att", a); }, []);
+
+  // Load from Gist on mount
+  useEffect(() => {
+    if (!syncToken || !gistId) return;
+    setSyncStatus("syncing");
+    gistLoad(syncToken, gistId).then(data => {
+      if (data?.materials) { setMaterials(data.materials); set("rf:mat", data.materials); }
+      if (data?.attempts) { setAttempts(data.attempts); set("rf:att", data.attempts); }
+      setSyncStatus("ok");
+    }).catch(() => setSyncStatus("error"));
+  }, []); // eslint-disable-line
+
+  // Auto-save to Gist on change (debounced 3s)
+  useEffect(() => {
+    if (!syncToken) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(async () => {
+      setSyncStatus("syncing");
+      try {
+        const newId = await gistSave(syncToken, gistId || null, { materials, attempts });
+        if (newId && newId !== gistId) { setGistId(newId); set("rf:gistid", newId); }
+        setSyncStatus("ok");
+      } catch { setSyncStatus("error"); }
+    }, 3000);
+  }, [materials, attempts]); // eslint-disable-line
 
   const K = apiKey; // shorthand
 
@@ -332,6 +391,36 @@ export default function App() {
         <button style={{ ...S.bsm(), color: "#f87171" }} onClick={() => { if (confirm("APIキーをリセットしますか？")) { localStorage.removeItem("rf:apikey"); setApiKey(""); } }}>APIキーをリセット</button>
       </div>
       <div style={S.card}>
+        <label style={S.lbl}>☁️ クラウド同期（スマホ↔PC）</label>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12, lineHeight: 1.6 }}>
+          GitHubの<b style={{color:"#94a3b8"}}>gist</b>スコープ付きトークンを入力すると、全デバイスで自動同期します。
+          <br/>取得: github.com → Settings → Developer settings → Personal access tokens → <b style={{color:"#94a3b8"}}>Tokens (classic)</b> → gistにチェック
+        </div>
+        {syncToken ? (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: syncStatus === "ok" ? "#34d399" : syncStatus === "error" ? "#f87171" : "#f59e0b" }}>
+                {syncStatus === "ok" ? "✓ 同期済み" : syncStatus === "syncing" ? "↻ 同期中..." : syncStatus === "error" ? "✗ エラー" : "—"}
+              </span>
+              {gistId && <a href={`https://gist.github.com/${gistId}`} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#64748b" }}>Gistを開く</a>}
+            </div>
+            <button style={{ ...S.bsm(), color: "#f87171" }} onClick={() => { if (confirm("同期を解除しますか？")) { setSyncToken(""); setGistId(""); set("rf:synctoken",""); set("rf:gistid",""); setSyncStatus("idle"); } }}>同期を解除</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...S.inp, flex: 1, fontSize: 12 }} type="password" value={syncTokenInput} onChange={e => setSTI(e.target.value)} placeholder="ghp_..." />
+            <button style={S.bsm(true)} onClick={async () => {
+              const t = syncTokenInput.trim(); if (!t) return;
+              setSyncStatus("syncing");
+              try {
+                const newId = await gistSave(t, null, { materials, attempts });
+                setSyncToken(t); setGistId(newId); set("rf:synctoken", t); set("rf:gistid", newId); setSTI(""); setSyncStatus("ok");
+              } catch { setSyncStatus("error"); }
+            }}>接続</button>
+          </div>
+        )}
+      </div>
+      <div style={S.card}>
         <label style={S.lbl}>データ管理</label>
         <div style={{ display: "flex", gap: 8 }}>
           <button style={S.bsm()} onClick={() => {
@@ -358,7 +447,7 @@ export default function App() {
   // ═══════ HOME ═══════
   if (view === "home") { const dc = getDue().length; return (
     <div style={S.app}>{OV}
-      <div style={S.hdr}><div><div style={{ fontSize: 22, fontWeight: 800, color: "#f59e0b" }}>⚡ RecallForge</div><div style={{ fontSize: 11, color: "#64748b" }}>説明できなければ、理解していない</div></div></div>
+      <div style={S.hdr}><div><div style={{ fontSize: 22, fontWeight: 800, color: "#f59e0b" }}>⚡ RecallForge</div><div style={{ fontSize: 11, color: "#64748b" }}>説明できなければ、理解していない</div></div>{syncToken && <div style={{ marginLeft: "auto", fontSize: 11, color: syncStatus === "ok" ? "#34d399" : syncStatus === "error" ? "#f87171" : "#f59e0b" }}>{syncStatus === "ok" ? "☁✓" : syncStatus === "syncing" ? "☁↻" : "☁✗"}</div>}</div>
       {dc > 0 && <div style={{ ...S.card, background: "#1e1b4b", borderColor: "#312e81", cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }} onClick={() => setView("due")}><span style={{ fontSize: 24 }}>🔔</span><div><div style={{ fontWeight: 700, fontSize: 14 }}>復習が必要</div><div style={{ fontSize: 12, color: "#818cf8" }}>{dc}件</div></div></div>}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <span style={{ fontSize: 14, color: "#94a3b8" }}>教材 ({materials.length})</span>
