@@ -317,7 +317,7 @@ export default function App() {
 
   const deleteMat = id => { if (!confirm("削除？")) return; saveMat(materials.filter(m => m.id !== id)); saveAtt(attempts.filter(a => a.materialId !== id)); };
   const getAllSecs = mat => { const o = []; for (const c of mat.chapters) for (const s of c.sections) o.push({ ...s, chapterTitle: c.title, chapterId: c.id }); return o; };
-  const getDue = () => { const now = Date.now(), d = []; for (const m of materials) for (const c of m.chapters) for (const s of c.sections) if (!s.srs?.nextReview || s.srs.nextReview <= now) d.push({ mat: m, chap: c, sec: s }); return d; };
+  const getDue = () => { const now = Date.now(), d = []; for (const m of materials) for (const c of m.chapters) for (const s of c.sections) if (!s.referenceOnly && (!s.srs?.nextReview || s.srs.nextReview <= now)) d.push({ mat: m, chap: c, sec: s }); return d; };
 
   const OV = proc && <div style={{ position: "fixed", inset: 0, background: "rgba(12,15,26,.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}><Spinner text={procMsg} /></div>;
   const NV = v => <div style={S.nav}><button style={S.nvb(v==="home")} onClick={()=>setView("home")}>📚 教材</button><button style={S.nvb(v==="review")} onClick={()=>setView("review")}>📊 履歴</button><button style={S.nvb(v==="due")} onClick={()=>setView("due")}>🔔 要復習</button><button style={S.nvb(v==="settings")} onClick={()=>setView("settings")}>⚙️</button></div>;
@@ -384,18 +384,33 @@ export default function App() {
     </div>); }
 
   // ═══════ SECTIONS ═══════
-  if (view === "sections" && selMat && selChap) { const mat = materials.find(m => m.id === selMat.id) || selMat; const chap = mat.chapters.find(c => c.id === selChap.id) || selChap; return (
+  if (view === "sections" && selMat && selChap) { const mat = materials.find(m => m.id === selMat.id) || selMat; const chap = mat.chapters.find(c => c.id === selChap.id) || selChap;
+    const toggleRef = (secId) => {
+      const updated = materials.map(m => m.id !== mat.id ? m : { ...m, chapters: m.chapters.map(c => c.id !== chap.id ? c : { ...c, sections: c.sections.map(s => s.id === secId ? { ...s, referenceOnly: !s.referenceOnly } : s) }) });
+      saveMat(updated);
+    };
+    return (
     <div style={S.app}>{OV}<div style={S.hdr}><button style={S.bk} onClick={() => { setSC(null); setView("chapters"); }}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>{chap.title}</div><div style={{ fontSize: 12, color: "#64748b" }}>{mat.title}</div></div></div>
-      {chap.sections.map(sec => { const sa = attempts.filter(a => a.sectionId === sec.id); const best = sa.length ? Math.max(...sa.map(a => a.score)) : null; return (
-        <div key={sec.id} style={S.card}>
+      {chap.sections.map(sec => { const sa = attempts.filter(a => a.sectionId === sec.id); const best = sa.length ? Math.max(...sa.map(a => a.score)) : null; const isRef = !!sec.referenceOnly; return (
+        <div key={sec.id} style={{ ...S.card, opacity: isRef ? 0.75 : 1 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{sec.title}</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><LB level={sec.srs?.level || 0} /><DB nr={sec.srs?.nextReview} /></div></div>
-            {best !== null && <SB score={best} size={40} />}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{sec.title}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                {!isRef && <><LB level={sec.srs?.level || 0} /><DB nr={sec.srs?.nextReview} /></>}
+                {isRef && <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 12, background: "#1e293b", color: "#64748b" }}>📖 参照用</span>}
+              </div>
+            </div>
+            {!isRef && best !== null && <SB score={best} size={40} />}
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10, marginTop: 8 }}>{sec.keywords.map((kw, i) => <span key={i} style={{ ...S.tag, fontSize: 11, padding: "2px 10px" }}>{kw}</span>)}</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button style={S.btn(true)} onClick={() => startRecall(mat, chap, sec)}>📝 説明</button>
-            <button style={{ ...S.btn(), background: "#312e81", color: "#c4b5fd" }} onClick={() => startCloze(mat, chap, sec)}>🧩 精密</button>
+          {!isRef && <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10, marginTop: 8 }}>{sec.keywords.map((kw, i) => <span key={i} style={{ ...S.tag, fontSize: 11, padding: "2px 10px" }}>{kw}</span>)}</div>}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button style={{ ...S.bsm(), background: "#0f2d1a", color: "#4ade80" }} onClick={() => { setSS(sec); setView("source"); }}>📖 原文</button>
+            {!isRef && <>
+              <button style={S.btn(true)} onClick={() => startRecall(mat, chap, sec)}>📝 説明</button>
+              <button style={{ ...S.btn(), background: "#312e81", color: "#c4b5fd" }} onClick={() => startCloze(mat, chap, sec)}>🧩 精密</button>
+            </>}
+            <button style={{ ...S.bsm(), marginLeft: "auto", color: isRef ? "#f59e0b" : "#64748b" }} onClick={() => toggleRef(sec.id)}>{isRef ? "復習に含める" : "参照用にする"}</button>
           </div></div>); })}
       {NV("home")}
     </div>); }
@@ -459,6 +474,21 @@ export default function App() {
           <button style={{ ...S.btn(true), width: "100%", opacity: hasC ? 1 : .4 }} disabled={!hasC} onClick={handleManualRegister}>キーワード抽出して登録</button>
         </div>
       )}
+    </div>); }
+
+  // ═══════ SOURCE ═══════
+  if (view === "source" && selSec) { return (
+    <div style={S.app}>
+      <div style={S.hdr}><button style={S.bk} onClick={() => setView("sections")}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>📖 原文</div><div style={{ fontSize: 12, color: "#64748b" }}>{selSec.title}</div></div></div>
+      <div style={{ background: "#131729", borderRadius: 14, padding: 20, border: "1px solid #1e293b", fontSize: 14, lineHeight: 1.9, color: "#cbd5e1", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {selSec.content || "（テキストなし）"}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+        {!selSec.referenceOnly && <>
+          <button style={{ ...S.btn(true), flex: 1 }} onClick={() => startRecall(selMat, selChap, selSec)}>📝 説明モードへ</button>
+          <button style={{ ...S.btn(), flex: 1, background: "#312e81", color: "#c4b5fd" }} onClick={() => startCloze(selMat, selChap, selSec)}>🧩 精密モードへ</button>
+        </>}
+      </div>
     </div>); }
 
   // ═══════ ADD CHAPTER ═══════
