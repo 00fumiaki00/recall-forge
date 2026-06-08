@@ -120,6 +120,9 @@ export default function App() {
   const [smartTexts, setSTx] = useState([]);
   const [smartPreview, setSPv] = useState(null);
 
+  const [addChPreview, setACP] = useState(null);
+  const addChRef = useRef();
+
   const [userAns, setUA] = useState("");
   const [shownKws, setSKw] = useState([]);
   const [lastResult, setLR] = useState(null);
@@ -226,6 +229,42 @@ export default function App() {
       }
       saveMat([{ id: uid(), title: addTitle.trim() || "無題の教材", chapters, createdAt: Date.now() }, ...materials]);
       setAT(""); setACh([{ id: uid(), title: "第1章", sections: [{ id: uid(), title: "第1節", content: "" }] }]); setView("home");
+    } catch (err) { alert("登録失敗: " + err.message); }
+    setProc(false);
+  };
+
+  const handleAddChapterFile = async e => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setProc(true); setPM("ファイルを読み取り中...");
+    try {
+      const b64 = await new Promise((r, j) => { const rd = new FileReader(); rd.onload = () => r(rd.result.split(",")[1]); rd.onerror = () => j(new Error("fail")); rd.readAsDataURL(file); });
+      const text = await extractTextFromFile(K, b64, file.type || "image/png");
+      setPM("章・節を自動判別中...");
+      setACP(await detectStructure(K, text));
+    } catch (err) { alert("読み取り失敗: " + err.message); }
+    setProc(false); if (addChRef.current) addChRef.current.value = "";
+  };
+
+  const handleAddChapterRegister = async () => {
+    if (!addChPreview || !selMat) return;
+    setProc(true); setPM("キーワードを抽出中...");
+    try {
+      const newChapters = [];
+      for (const ch of addChPreview.chapters) {
+        const secs = [];
+        for (const sec of ch.sections) {
+          if (!sec.content?.trim()) continue;
+          setPM(`KW抽出: ${ch.title} > ${sec.title}`);
+          const kws = await extractKeywords(K, sec.content.trim());
+          secs.push({ id: uid(), title: sec.title, content: sec.content.trim(), keywords: kws, srs: { interval: 0, ease: 2.5, level: 0, nextReview: 0 } });
+        }
+        if (secs.length) newChapters.push({ id: uid(), title: ch.title, sections: secs });
+      }
+      const updated = materials.map(m => m.id !== selMat.id ? m : { ...m, chapters: [...m.chapters, ...newChapters] });
+      saveMat(updated);
+      setSM(updated.find(m => m.id === selMat.id));
+      setACP(null);
+      setView("chapters");
     } catch (err) { alert("登録失敗: " + err.message); }
     setProc(false);
   };
@@ -337,7 +376,7 @@ export default function App() {
 
   // ═══════ CHAPTERS ═══════
   if (view === "chapters" && selMat) { const mat = materials.find(m => m.id === selMat.id) || selMat; return (
-    <div style={S.app}>{OV}<div style={S.hdr}><button style={S.bk} onClick={() => setView("home")}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>{mat.title}</div></div><div style={{ marginLeft: "auto" }}><button style={{ ...S.bsm(), color: "#f87171" }} onClick={() => { deleteMat(mat.id); setView("home"); }}>削除</button></div></div>
+    <div style={S.app}>{OV}<div style={S.hdr}><button style={S.bk} onClick={() => setView("home")}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>{mat.title}</div></div><div style={{ marginLeft: "auto", display: "flex", gap: 8 }}><button style={S.bsm(true)} onClick={() => { setACP(null); setSM(mat); setView("add-chapter"); }}>＋ 章を追加</button><button style={{ ...S.bsm(), color: "#f87171" }} onClick={() => { deleteMat(mat.id); setView("home"); }}>削除</button></div></div>
       {mat.chapters.map(ch => { const ca = attempts.filter(a => ch.sections.some(s => s.id === a.sectionId)); const avg = ca.length ? Math.round(ca.reduce((s, a) => s + a.score, 0) / ca.length) : null; return (
         <div key={ch.id} style={{ ...S.card, cursor: "pointer" }} onClick={() => { setSM(mat); setSC(ch); setView("sections"); }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 15 }}>{ch.title}</div><div style={{ fontSize: 12, color: "#64748b" }}>{ch.sections.length}節</div></div>{avg !== null && <SB score={avg} size={40} />}<span style={{ color: "#475569", fontSize: 18, marginLeft: 8 }}>›</span></div></div>); })}
@@ -420,6 +459,30 @@ export default function App() {
           <button style={{ ...S.btn(true), width: "100%", opacity: hasC ? 1 : .4 }} disabled={!hasC} onClick={handleManualRegister}>キーワード抽出して登録</button>
         </div>
       )}
+    </div>); }
+
+  // ═══════ ADD CHAPTER ═══════
+  if (view === "add-chapter" && selMat) { const mat = materials.find(m => m.id === selMat.id) || selMat; return (
+    <div style={S.app}>{OV}
+      <div style={S.hdr}><button style={S.bk} onClick={() => setView("chapters")}>←</button><div><div style={{ fontSize: 18, fontWeight: 700 }}>章を追加</div><div style={{ fontSize: 12, color: "#64748b" }}>{mat.title}</div></div></div>
+      <div style={{ border: "2px dashed #334155", borderRadius: 14, padding: 24, textAlign: "center", cursor: "pointer", color: "#64748b", fontSize: 14, background: "#0f1225", marginBottom: 12 }} onClick={() => addChRef.current?.click()}>
+        <div style={{ fontSize: 28, marginBottom: 6 }}>📄</div>章のファイルをアップロード<br /><span style={{ fontSize: 11, color: "#475569" }}>PDF / 画像 / スクショ（〜100ページ推奨）</span>
+      </div>
+      <input ref={addChRef} type="file" accept="image/*,.pdf,application/pdf" style={{ display: "none" }} onChange={handleAddChapterFile} />
+      {addChPreview && <>
+        <div style={{ marginBottom: 12 }}>
+          <label style={S.lbl}>検出された構造</label>
+          {addChPreview.chapters.map((ch, ci) => <div key={ci} style={{ ...S.card, marginBottom: 8 }}>
+            <input style={{ ...S.inp, fontWeight: 700, marginBottom: 8 }} value={ch.title} onChange={e => { const n = JSON.parse(JSON.stringify(addChPreview)); n.chapters[ci].title = e.target.value; setACP(n); }} />
+            {ch.sections.map((sec, si) => <div key={si} style={{ background: "#0f1225", borderRadius: 8, padding: 10, marginBottom: 6, border: "1px solid #1e293b" }}>
+              <input style={{ ...S.inp, fontSize: 13, marginBottom: 6 }} value={sec.title} onChange={e => { const n = JSON.parse(JSON.stringify(addChPreview)); n.chapters[ci].sections[si].title = e.target.value; setACP(n); }} />
+              <div style={{ fontSize: 12, color: "#64748b", maxHeight: 60, overflow: "hidden" }}>{sec.content?.slice(0, 150)}...</div>
+            </div>)}
+          </div>)}
+        </div>
+        <button style={{ ...S.btn(true), width: "100%", marginBottom: 8 }} onClick={handleAddChapterRegister}>キーワード抽出して追加</button>
+        <button style={{ ...S.btn(), width: "100%" }} onClick={() => addChRef.current?.click()}>別のファイルで上書き</button>
+      </>}
     </div>); }
 
   // ═══════ RECALL ═══════
