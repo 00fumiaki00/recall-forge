@@ -7,7 +7,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // ── Claude API ──
 async function askClaude(apiKey, messages, sys) {
-  const body = { model: "claude-sonnet-4-20250514", max_tokens: 4096, messages };
+  const body = { model: "claude-haiku-4-5-20251001", max_tokens: 4096, messages };
   if (sys) body.system = sys;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
